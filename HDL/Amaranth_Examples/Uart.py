@@ -6,11 +6,18 @@ from amaranth.build import *
 
 TILE = 2
 
-uart_tile = [
+#uart_tile = [
+#    Resource("ext_uart", 0,
+#            Subsignal("tx", Pins("12", dir="o", conn=("tile", TILE)), Attrs(IO_STANDARD="SB_LVCMOS")),
+#            Subsignal("rx", Pins("11", dir="i", conn=("tile", TILE)), Attrs(IO_STANDARD="SB_LVCMOS")),
+#            Subsignal("gnd", Pins("10", dir="o", conn=("tile", TILE)), Attrs(IO_STANDARD="SB_LVCMOS")))
+#]
+
+uart_pmod = [
     Resource("ext_uart", 0,
-            Subsignal("tx", Pins("12", dir="o", conn=("tile", TILE)), Attrs(IO_STANDARD="SB_LVCMOS")),
-            Subsignal("rx", Pins("11", dir="i", conn=("tile", TILE)), Attrs(IO_STANDARD="SB_LVCMOS")),
-            Subsignal("gnd", Pins("10", dir="o", conn=("tile", TILE)), Attrs(IO_STANDARD="SB_LVCMOS")))
+            Subsignal("tx", Pins("10", dir="o", conn=("pmod", 5)), Attrs(IO_STANDARD="SB_LVCMOS")),
+            Subsignal("rx", Pins("4", dir="i", conn=("pmod", 5)), Attrs(IO_STANDARD="SB_LVCMOS")),
+            Subsignal("gnd", Pins("9", dir="o", conn=("pmod", 5)), Attrs(IO_STANDARD="SB_LVCMOS")))
 ]
 
 class Uart(Elaboratable):
@@ -52,7 +59,7 @@ class Uart(Elaboratable):
 
 def synth():
     platform = IceLogicBusPlatform()
-    platform.add_resources(uart_tile)
+    platform.add_resources(uart_pmod)
     platform.build(Uart(), do_program=True)
 
 
