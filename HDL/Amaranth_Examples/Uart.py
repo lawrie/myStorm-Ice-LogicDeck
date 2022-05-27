@@ -1,24 +1,19 @@
 from amaranth import *
 from amaranth_stdio.serial import AsyncSerial
-
-from mystorm_boards.icelogicbus import *
 from amaranth.build import *
 
-TILE = 2
+from mystorm_boards.icelogicbus import *
 
-#uart_tile = [
-#    Resource("ext_uart", 0,
-#            Subsignal("tx", Pins("12", dir="o", conn=("tile", TILE)), Attrs(IO_STANDARD="SB_LVCMOS")),
-#            Subsignal("rx", Pins("11", dir="i", conn=("tile", TILE)), Attrs(IO_STANDARD="SB_LVCMOS")),
-#            Subsignal("gnd", Pins("10", dir="o", conn=("tile", TILE)), Attrs(IO_STANDARD="SB_LVCMOS")))
-#]
+PMOD = 5
 
 uart_pmod = [
     Resource("ext_uart", 0,
-            Subsignal("tx", Pins("10", dir="o", conn=("pmod", 5)), Attrs(IO_STANDARD="SB_LVCMOS")),
-            Subsignal("rx", Pins("4", dir="i", conn=("pmod", 5)), Attrs(IO_STANDARD="SB_LVCMOS")),
-            Subsignal("gnd", Pins("9", dir="o", conn=("pmod", 5)), Attrs(IO_STANDARD="SB_LVCMOS")))
+             Subsignal("tx", Pins("10", dir="o", conn=("pmod", PMOD))),
+             Subsignal("rx", Pins("4", dir="i", conn=("pmod", PMOD))),
+             Subsignal("gnd", Pins("9", dir="o", conn=("pmod", PMOD))),
+             Attrs(IO_STANDARD="SB_LVCMOS"))
 ]
+
 
 class Uart(Elaboratable):
     def elaborate(self, platform):
@@ -56,6 +51,7 @@ class Uart(Elaboratable):
         ]
 
         return m
+
 
 def synth():
     platform = IceLogicBusPlatform()
