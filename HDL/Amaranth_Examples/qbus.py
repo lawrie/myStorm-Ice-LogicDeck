@@ -1,219 +1,247 @@
 from amaranth import *
-from amaranth.hdl.ast import Rose
+from amaranth.hdl.ast import Rose, Fell
 from amaranth.utils import bits_for
+from amaranth.build import *
 
 from mystorm_boards.icelogicbus import *
 from HDL.Amaranth_Examples.Tiles.seven_seg_tile import SevenSegController, tile_resources
 
-TILE = 1
+from amaranth.lib.cdc import FFSynchronizer
 
-class SpiMem(Elaboratable):
-    def __init__(self, addr_bits=32, data_bits=8):
-        # parameters
-        self.addr_bits = addr_bits  # Must be power of 2
-        self.data_bits = data_bits  # currently must be 8
+from HDL.Amaranth_Examples.Tiles.pll import PLL
 
-        # inputs
-        self.copi = Signal()
-        self.din = Signal(data_bits)
-        self.csn = Signal()
-        self.sclk = Signal()
+BLADE = 1
+TILE = 3
 
-        # outputs
-        self.addr = Signal(addr_bits)
-        self.cipo = Signal()
-        self.dout = Signal(data_bits)
-        self.rd = Signal()
-        self.wr = Signal()
+led_blade = [
+    Resource("leds6", 0,
+                Subsignal("leds",
+                          Pins("1 2 3 4 5 6", dir="o", invert=True, conn=("blade", BLADE)),
+                          Attrs(IO_STANDARD="SB_LVCMOS")
+                          )
+             )
+]
 
-    def elaborate(self, platform):
-        m = Module()
+PMOD = 5
 
-        r_req_read = Signal()
-        r_req_write = Signal()
-        r_data = Signal(self.data_bits)
-        r_addr = Signal(self.addr_bits + 1)
-
-        r_bit_count = Signal(bits_for(self.addr_bits + 8) + 1)
-
-        r_copi = Signal()
-        r_sclk = Signal(2)
-
-        # Drive outputs
-        m.d.comb += [
-            self.rd.eq(r_req_read),
-            self.wr.eq(r_req_write),
-            self.cipo.eq(r_data[-1]),
-            self.dout.eq(r_data),
-            self.addr.eq(r_addr[:-1])
-        ]
-
-        # De-glitch and edge detection
-        m.d.sync += [
-            r_copi.eq(self.copi),
-            r_sclk.eq(Cat(self.sclk, r_sclk[:-1]))
-        ]
-
-        # State machine
-        with m.If(self.csn):
-            m.d.sync += [
-                r_req_read.eq(0),
-                r_req_write.eq(0),
-                r_bit_count.eq(self.addr_bits + 7)
-            ]
-        with m.Else():  # csn == 0
-            with m.If(r_sclk == 0b01):  # rising sclk
-                # If writing shift in data
-                m.d.sync += r_data.eq(Mux(r_req_read, self.din, Cat(r_copi, r_data[:-1])))
-                with m.If(r_bit_count[-1] == 0):  # Address bits
-                    m.d.sync += [
-                        r_bit_count.eq(r_bit_count - 1),
-                        r_addr.eq(Cat(r_copi, r_addr[:-1]))  # Shift in address
-                    ]
-                with m.Else():  # read or write
-                    with m.If(r_bit_count[:4] == 7):  # First bit in new byte, increment address
-                        m.d.sync += r_addr[:-1].eq(r_addr[:-1] + 1)
-                    m.d.sync += r_req_read.eq(Mux(r_bit_count[:3] == 1, r_addr[-1], 0))
-                    with m.If(r_bit_count[:3] == 0):  # Last bit in byte
-                        with m.If(r_addr[-1] == 0):
-                            m.d.sync += r_req_write.eq(1)
-                        m.d.sync += r_bit_count[3].eq(0)  # Allow increment of address
-                    with m.Else():
-                        m.d.sync += r_req_write.eq(0)
-                    m.d.sync += r_bit_count[:3].eq(r_bit_count[:3] - 1)
-
-        return m
+qspi_pmod = [
+    Resource("qspi_test", 0,
+             Subsignal("qss", Pins("10", dir="o", conn=("pmod", PMOD))),
+             Subsignal("qck", Pins("9", dir="o", conn=("pmod", PMOD))),
+             Subsignal("gnd", Pins("8", dir="o", conn=("pmod", PMOD))),
+             Subsignal("qd", Pins("1 2 3 4", dir="o", conn=("pmod", PMOD))),
+             Attrs(IO_STANDARD="SB_LVCMOS"))
+]
 
 class QspiMem(Elaboratable):
-    def __init__(self, addr_bits=32, data_bits=16):
+    def __init__(self, addr_bits=23, data_bits=8):
         # parameters
-        self.addr_bits = addr_bits  # Must be power of 2
-        self.data_bits = data_bits  # currently must be 8
-        self.addr_nibbles = 2*addr_bits
-        self.data_nibbles = 2*data_bits
+        self.addr_bits    = addr_bits
+        self.data_bits    = data_bits
+        self.addr_nibbles = 4
+        self.data_nibbles = 2
 
         # inputs
-        self.copi = Signal(4)
-        self.din = Signal(data_bits)
-        self.csn = Signal()
-        self.sclk = Signal()
+        self.qd_i  = Signal(4)
+        self.qss   = Signal()
+        self.qck   = Signal()
+        self.din   = Signal(data_bits)
 
         # outputs
-        self.addr = Signal(addr_bits + 7)
-        self.cipo = Signal(4)
-        self.dout = Signal(data_bits)
-        self.rd = Signal()
-        self.wr = Signal()
+        self.addr  = Signal(addr_bits)
+        self.qd_o  = Signal(4)
+        self.qd_oe = Signal(4)
+        self.dout  = Signal(data_bits)
+        self.rd    = Signal()
+        self.wr    = Signal()
 
     def elaborate(self, platform):
         m = Module()
 
-        r_req_read = Signal()
-        r_req_write = Signal()
-        r_cmd = Signal(self.data_bits)
-        r_data = Signal(self.data_bits)
-        r_addr = Signal(self.addr_bits + 7)
+        r_req_read     = Signal()
+        r_req_write    = Signal()
+        r_cmd          = Signal(self.data_bits)
+        r_data         = Signal(self.data_bits)
+        r_addr         = Signal(self.addr_bits)
 
-        r_nibble_count = Signal(bits_for(12))
+        r_nibble_count = Signal(5)
 
-        r_copi = Signal(4)
-        r_sclk = Signal() # use ffsync
+        r_qd_i         = Signal(4)
+        r_qck          = Signal()
+        r_qss          = Signal()
+
+        # Ignore spurious QSPI data after programming
+        pwr_on_reset = Signal(9)
+        with m.If(~pwr_on_reset.all()):
+            m.d.sync += pwr_on_reset.eq(pwr_on_reset + 1)
+
+        new_nibble = ~r_qss & pwr_on_reset.all() & Rose(r_qck) & (r_qd_i != 0xA)
 
         # Drive outputs
         m.d.comb += [
             self.rd.eq(r_req_read),
             self.wr.eq(r_req_write),
-            self.cipo.eq(r_data[-4]),
             self.dout.eq(r_data),
             self.addr.eq(r_addr),
         ]
 
-        # De-glitch and edge detection
-        m.d.sync += [
-            r_copi.eq(self.copi),
-            r_sclk.eq(self.sclk)
-            #r_sclk.eq(Cat(self.sclk, r_sclk[:-1]))
-        ]
+        # De-glitch
+        m.submodules += FFSynchronizer(self.qss, r_qss, reset=1)
+        m.submodules += FFSynchronizer(self.qck, r_qck, reset=1)
+        m.submodules += FFSynchronizer(self.qd_i, r_qd_i, reset=0)
 
-        with m.If(self.csn):
+        # Reset signals when qss is high
+        with m.If(r_qss):
             m.d.sync += [
                 r_req_read.eq(0),
                 r_req_write.eq(0),
-                r_nibble_count.eq(0)
+                r_nibble_count.eq(0),
+                self.qd_oe.eq(0)
             ]
-        with m.Else():  # csn == 0
-            with m.If(Rose(r_sclk)):
-                r_nibble_count.eq(r_nibble_count + 1)
-                m.d.sync += r_data.eq(Mux(r_req_read, self.din, Cat(r_copi, r_data[:-4])))
-                with m.FSM():
-                    with m.State("COMMAND"):
-                        m.d.sync += r_cmd.eq(Cat(r_copi, r_cmd[:-4]))
-                        with m.If(r_nibble_count == 2):
-                            m.next = "ADDRESS"
-                    with m.State("ADDRESS"):
-                        with m.If(r_nibble_count == self.addr_nibbles+2):
-                            m.d.sync += r_addr.eq(Cat(r_cmd[:7], r_copi, r_addr[:-11]))
-                            m.next = "DATA"
-                        with m.Else():
-                            m.d.sync += r_addr.eq(Cat(r_copi, r_addr[:-4])),
-                    with m.State("DATA"):
-                        # write data
-                        r_data.eq(Cat(r_copi, r_data[:-4]))
-                        with m.If(r_nibble_count == self.addr_nibbles+2+self.data_nibbles):
-                            m.d.sync += [
-                                r_req_read.eq(0),
-                                r_req_write.eq(~r_cmd[-1:]),
-                                r_addr.eq(r_addr + 1),
-                                r_nibble_count.eq(self.addr_nibbles+2)
-                            ]
-                        with m.Else():
-                            m.d.sync += [
-                                r_req_write.eq(0),
-                                r_req_read.eq(r_cmd[-1:])
-                            ]
+        with m.Else():  # qss == 0
+            with m.If(new_nibble):
+                m.d.sync += r_nibble_count.eq(r_nibble_count + 1)
 
+        with m.FSM():
+            with m.State("COMMAND"):
+                with m.If(new_nibble):
+                    # Read in the byte with the command bit and the top 7 address bits
+                    m.d.sync += r_cmd.eq(Cat(r_qd_i, r_cmd[:-4]))
+                    with m.If(r_nibble_count == 1):
+                        m.next = "ADDRESS"
+            with m.State("ADDRESS"):
+                with m.If(new_nibble):
+                    with m.If(r_nibble_count == self.addr_nibbles+1):
+                        m.d.sync += r_addr.eq(Cat(r_qd_i, r_addr[:-11], r_cmd[:7]))
+                        with m.If(r_cmd[7]):
+                            m.d.sync += [
+                                self.qd_oe.eq(Repl(0b1, 4)),
+                                r_req_read.eq(1)
+                            ]
+                            m.next = "READ_DATA"
+                        with m.Else():
+                            m.next = "WRITE_DATA"
+                    with m.Else():
+                        m.d.sync += r_addr.eq(Cat(r_qd_i, r_addr[:-4])),
+            with m.State("WRITE_DATA"):
+                with m.If(new_nibble):
+                    # write data
+                    m.d.sync += r_data.eq(Cat(r_qd_i, r_data[:-4]))
+                    with m.If(r_nibble_count[0]):
+                        m.d.sync += [
+                            r_req_write.eq(1),
+                            r_addr.eq(r_addr + 1)
+                        ]
+                    with m.Else():
+                        m.d.sync += r_req_write.eq(0)
+                with m.If(Rose(r_qss)):
+                    m.next = "COMMAND"
+            with m.State("READ_DATA"):
+                with m.If(new_nibble):
+                    with m.If(r_nibble_count[0]):
+                        m.d.sync += [
+                            r_req_read.eq(1),
+                            r_addr.eq(r_addr + 1),
+                            self.qd_o.eq(self.din[:4])
+                        ]
+                    with m.Else():
+                        m.d.sync += [
+                            r_req_read.eq(0),
+                            self.qd_o.eq(self.din[4:]),
+                        ]
+                with m.If(Rose(r_qss)):
+                    m.next = "COMMAND"
+
+        return m
 
 
 class QbusTest(Elaboratable):
     def elaborate(self, platform):
-        csn = platform.request("qss")
-        sclk = platform.request("qck")
-        copi = platform.request("qd0").i
-        cipo = platform.request("qd1", dir="-")
+        qspi  = platform.request("qspi")
+        qss   = qspi.cs
+        qck   = qspi.clk
+        qd_i  = qspi.data.i
+        qd_o  = qspi.data.o
+        qd_oe = qspi.data.oe
+        leds6 = platform.request("leds6")
+        led = platform.request("led")
+        qspi_test = platform.request("qspi_test")
+
+        rd    = Signal()
+        wr    = Signal()
+        addr  = Signal(23)
+        din   = Signal(8)
+        dout  = Signal(8)
 
         m = Module()
 
-        rd = Signal()
-        wr = Signal()
-        addr = Signal(32)
-        din = Signal(8)
-        dout = Signal(8)
-        flags = Signal(8)
+        # Clock generator.
+        clk_in = platform.request(platform.default_clk, dir='-')[0]
+        # Create a Pll for 100Mhz clock
+        m.submodules.pll = pll = PLL(freq_in_mhz=int(platform.default_clk_frequency / 1000000),
+                                     freq_out_mhz=100,
+                                     domain_name="sync")
+        # Set the sync domain to the pll domain
+        m.domains.sync = cd_sync = pll.domain
+        m.d.comb += pll.clk_pin.eq(clk_in)
+        platform.add_clock_constraint(cd_sync.clk, 100000000)
 
-        m.submodules.spimem = spimem = SpiMem()
+        pwr_on_reset = Signal(9)
+        with m.If(~pwr_on_reset.all()):
+            m.d.sync += pwr_on_reset.eq(pwr_on_reset + 1)
 
+        m.d.comb += [
+            qspi_test.qss.eq(qss),
+            qspi_test.qck.eq(qck),
+            qspi_test.qd.eq(qd_i),
+            qspi_test.gnd.eq(0)
+        ]
+
+        # Add QspiMem submodule
+        m.submodules.qspimem = qspimem = QspiMem()
+
+        # Create memory to read and write
         mem = Memory(width=8, depth=4 * 1024)
         m.submodules.r = r = mem.read_port()
         m.submodules.w = w = mem.write_port()
 
         m.d.comb += [
-            spimem.csn.eq(csn),
-            spimem.sclk.eq(sclk),
-            spimem.copi.eq(copi),
-            spimem.din.eq(din),
-            cipo.eq(spimem.cipo),
-            addr.eq(spimem.addr),
-            dout.eq(spimem.dout),
-            rd.eq(spimem.rd),
-            wr.eq(spimem.wr),
+            qspimem.qss.eq(qss),
+            qspimem.qck.eq(qck),
+            qspimem.qd_i.eq(qd_i),
+            qspimem.din.eq(din),
+            qd_o.eq(qspimem.qd_o),
+            qd_oe.eq(qspimem.qd_oe),
+            addr.eq(qspimem.addr),
+            dout.eq(qspimem.dout),
+            rd.eq(qspimem.rd),
+            wr.eq(qspimem.wr),
             r.addr.eq(addr),
             din.eq(r.data),
             w.data.eq(dout),
             w.addr.eq(addr),
-            w.en.eq(wr),
-            flags.eq(Cat(C(0, 6), spimem.wr, spimem.rd))
+            w.en.eq(wr)
         ]
 
+        with m.If(qspimem.wr):
+            m.d.sync += led.eq(1)
+
+        nibbles = Signal(8, reset=0)
+        r_qss = Signal()
+        r_qck = Signal()
+        r_qd_i = Signal(4)
+
+        m.submodules += FFSynchronizer(qss, r_qss, reset=1)
+        m.submodules += FFSynchronizer(qck, r_qck, reset=1)
+        m.submodules += FFSynchronizer(qd_i, r_qd_i, reset=0)
+
+        with m.If(~r_qss & pwr_on_reset.all()):
+            with m.If(Rose(r_qck)):
+                m.d.sync += nibbles.eq(nibbles + 1)
+
+        m.d.comb += leds6.eq(nibbles)
+
+        # Put Data on 7-segment display
         m.submodules.seven = seven = SevenSegController()
         display = Signal(8)
 
@@ -222,7 +250,7 @@ class QbusTest(Elaboratable):
         leds7 = Cat([seg_pins.a, seg_pins.b, seg_pins.c, seg_pins.d,
                      seg_pins.e, seg_pins.f, seg_pins.g])
 
-        timer = Signal(20)
+        timer = Signal(19)
         m.d.sync += timer.eq(timer + 1)
 
         m.d.comb += [
@@ -230,23 +258,29 @@ class QbusTest(Elaboratable):
         ]
 
         for i in range(3):
-            m.d.comb += seg_pins.ca[i].eq(timer[16:18] == i)
+            m.d.comb += seg_pins.ca[i].eq(timer[17:19] == i)
 
         with m.If(seg_pins.ca[2]):
-            m.d.comb += seven.val.eq(1)
+            m.d.comb += seven.val.eq(addr[:4])
         with m.If(seg_pins.ca[1]):
             m.d.comb += seven.val.eq(display[-4:])
         with m.If(seg_pins.ca[0]):
             m.d.comb += seven.val.eq(display[:4])
 
-        with m.If(spimem.wr): # & (spimem.addr == LED_ADDR)
-            m.d.sync += display.eq(1)
-            #m.d.sync += display.eq(spimem.dout)
+        with m.If(qspimem.wr):
+            m.d.sync += display.eq(dout)
 
         return m
 
 def synth():
     platform = IceLogicBusPlatform()
     platform.add_resources(tile_resources(TILE))
+    platform.add_resources(led_blade)
+    platform.add_resources(qspi_pmod)
     platform.build(QbusTest(), do_program=True)
-    # platform.bus_send(bytearray(b'\x03\x00\x00\x00\x01\xdb'))
+    print("Sending QSPI data")
+    #platform.bus_send(bytearray(b'\x03\x00\x00\x00\x00\x00\x00\x00\x02\x42\x56'))
+    print("Data sent")
+
+if __name__ == "__main__":
+    synth()
