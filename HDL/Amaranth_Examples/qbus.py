@@ -2,6 +2,8 @@ from amaranth import *
 from amaranth.hdl.ast import Rose, Fell
 from amaranth.utils import bits_for
 from amaranth.build import *
+from amaranth_stdio.serial import AsyncSerial
+from amaranth.lib.fifo import SyncFIFOBuffered
 
 from mystorm_boards.icelogicbus import *
 from HDL.Amaranth_Examples.Tiles.seven_seg_tile import SevenSegController, tile_resources
@@ -22,16 +24,42 @@ led_blade = [
              )
 ]
 
-PMOD = 5
+TEST_PMOD = 4
 
 qspi_pmod = [
     Resource("qspi_test", 0,
-             Subsignal("qss", Pins("10", dir="o", conn=("pmod", PMOD))),
-             Subsignal("qck", Pins("9", dir="o", conn=("pmod", PMOD))),
-             Subsignal("gnd", Pins("8", dir="o", conn=("pmod", PMOD))),
-             Subsignal("qd", Pins("1 2 3 4", dir="o", conn=("pmod", PMOD))),
+             Subsignal("qss", Pins("10", dir="o", conn=("pmod", TEST_PMOD))),
+             Subsignal("qck", Pins("9", dir="o", conn=("pmod", TEST_PMOD))),
+             Subsignal("gnd", Pins("8", dir="o", conn=("pmod", TEST_PMOD))),
+             Subsignal("qd", Pins("1 2 3 4", dir="o", conn=("pmod", TEST_PMOD))),
              Attrs(IO_STANDARD="SB_LVCMOS"))
 ]
+
+PMOD = 5
+
+uart_pmod = [
+    Resource("ext_uart", 0,
+             Subsignal("tx", Pins("10", dir="o", conn=("pmod", PMOD))),
+             Subsignal("rx", Pins("4", dir="i", conn=("pmod", PMOD))),
+             Subsignal("gnd", Pins("9", dir="o", conn=("pmod", PMOD))),
+             Attrs(IO_STANDARD="SB_LVCMOS"))
+]
+
+
+class ByteToHex(Elaboratable):
+    def __init__(self):
+        self.b = Signal(4)
+        self.h = Signal(8)
+
+    def elaborate(self, platform):
+        m = Module()
+
+        with m.If(self.b < 10):
+            m.d.comb += self.h.eq(ord('0') + self.b)
+        with m.Else():
+            m.d.comb += self.h.eq(ord('a') + self.b - 10)
+
+        return m
 
 class QspiMem(Elaboratable):
     def __init__(self, addr_bits=23, data_bits=8):
@@ -270,6 +298,59 @@ class QbusTest(Elaboratable):
         with m.If(qspimem.wr):
             m.d.sync += display.eq(dout)
 
+        ext_uart = platform.request("ext_uart")
+        divisor = int(100000000 // 115200)
+
+        tx = ext_uart.tx
+        rx = ext_uart.rx
+        gnd = ext_uart.gnd
+
+        # Create the uart
+        m.submodules.serial = serial = AsyncSerial(divisor=divisor)
+
+        m.submodules.bytetohex = bytetohex = ByteToHex()
+
+        m.submodules.fifo = fifo = SyncFIFOBuffered(width=4, depth=256)
+
+        tx_busy  = Signal(1, reset=0)
+        tx_state = Signal(1, reset=0)
+        nl_state = Signal(1, reset=0)
+
+        # Connect the fifo
+        m.d.comb += [
+            fifo.w_en.eq(~r_qss & Rose(r_qck) & pwr_on_reset.all()),
+            fifo.w_data.eq(r_qd_i),
+            fifo.r_en.eq(~tx_busy)
+        ]
+
+        m.d.comb += [
+            # Write hex data
+            serial.tx.data.eq(Mux(~fifo.r_rdy, Mux(nl_state, ord("\n"), ord("\r")), bytetohex.h)),
+            # Write data when received
+            serial.tx.ack.eq(tx_busy),
+            # Set GND pin
+            gnd.eq(0),
+            # Connect uart pins
+            serial.rx.i.eq(rx),
+            tx.eq(serial.tx.o)
+        ]
+
+        with m.Switch(tx_state):
+            with m.Case(0):
+                with m.If(fifo.r_rdy | (Rose(r_qss) & pwr_on_reset.all()) | nl_state):
+                    m.d.sync += [
+                        tx_state.eq(1),
+                        bytetohex.b.eq(fifo.r_data),
+                        tx_busy.eq(1)
+                    ]
+            with m.Case(1):
+                with m.If(serial.tx.rdy):
+                    m.d.sync += [
+                        tx_state.eq(0),
+                        tx_busy.eq(0),
+                        nl_state.eq(serial.tx.data == ord("\r"))
+                    ]
+
         return m
 
 def synth():
@@ -277,9 +358,10 @@ def synth():
     platform.add_resources(tile_resources(TILE))
     platform.add_resources(led_blade)
     platform.add_resources(qspi_pmod)
+    platform.add_resources(uart_pmod)
     platform.build(QbusTest(), do_program=True)
     print("Sending QSPI data")
-    #platform.bus_send(bytearray(b'\x03\x00\x00\x00\x00\x00\x00\x00\x02\x42\x56'))
+    platform.bus_send(bytearray(b'\x03\x00\x00\x00\x00\x00\x00\x00\x02\x42\x56'))
     print("Data sent")
 
 if __name__ == "__main__":
