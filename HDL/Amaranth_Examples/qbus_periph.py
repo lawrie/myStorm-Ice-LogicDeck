@@ -6,11 +6,11 @@ from amaranth_stdio.serial import AsyncSerial
 from amaranth.lib.fifo import SyncFIFOBuffered
 
 from mystorm_boards.icelogicbus import *
-from HDL.Amaranth_Examples.Tiles.seven_seg_tile import SevenSegController, tile_resources
+from HDL.Tiles.seven_seg_tile import SevenSegController, tile_resources
 
 from amaranth.lib.cdc import FFSynchronizer
 
-from HDL.Amaranth_Examples.Tiles.pll import PLL
+from HDL.Misc.pll import PLL
 
 BLADE = 1
 TILE = 3
