@@ -76,7 +76,7 @@ class QspiMem(Elaboratable):
         with m.If(~pwr_on_reset.all()):
             m.d.sync += pwr_on_reset.eq(pwr_on_reset + 1)
 
-        new_nibble = ~r_qss & pwr_on_reset.all() & Rose(r_qck) & (r_qd_i != 0xA)
+        new_nibble = ~r_qss & pwr_on_reset.all() & Rose(r_qck)
 
         # Drive outputs
         m.d.comb += [
@@ -88,7 +88,7 @@ class QspiMem(Elaboratable):
 
         # De-glitch
         m.submodules += FFSynchronizer(self.qss, r_qss, reset=1)
-        m.submodules += FFSynchronizer(self.qck, r_qck, reset=1)
+        m.submodules += FFSynchronizer(self.qck, r_qck, reset=0)
         m.submodules += FFSynchronizer(self.qd_i, r_qd_i, reset=0)
 
         # Reset signals when qss is high
@@ -252,7 +252,7 @@ class QbusPeriph(Elaboratable):
         ]
 
         # 7-segment lower byte
-        with m.If(qspimem.wr):
+        with m.If(qspimem.wr & (qspimem.addr == 0)):
             m.d.sync += display.eq(qspimem.dout)
 
         # 7-segment top nibble
@@ -275,7 +275,7 @@ def synth():
     platform.add_resources(uart_pmod)
     platform.build(QbusPeriph(), nextpnr_opts="--timing-allow-fail", do_program=True)
     print("Sending QSPI data")
-    platform.bus_send(bytearray(b'\x03\x00\x00\x00\x00\x00\x00\x00\x0b\x42\x06\xb8Hello\r\n\n'))
+    platform.bus_send(bytearray(b'\x03\x00\x00\x00\x00\x00\x00\x00\x0a\x42\x06\xb8Hello\r\n'))
     print("Data sent")
 
 if __name__ == "__main__":

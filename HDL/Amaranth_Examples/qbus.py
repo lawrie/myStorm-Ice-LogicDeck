@@ -106,7 +106,7 @@ class QspiMem(Elaboratable):
         with m.If(~pwr_on_reset.all()):
             m.d.sync += pwr_on_reset.eq(pwr_on_reset + 1)
 
-        new_nibble = ~r_qss & pwr_on_reset.all() & Rose(r_qck) & (r_qd_i != 0xA)
+        new_nibble = ~r_qss & pwr_on_reset.all() & Rose(r_qck)
 
         # Drive outputs
         m.d.comb += [
@@ -118,7 +118,7 @@ class QspiMem(Elaboratable):
 
         # De-glitch
         m.submodules += FFSynchronizer(self.qss, r_qss, reset=1)
-        m.submodules += FFSynchronizer(self.qck, r_qck, reset=1)
+        m.submodules += FFSynchronizer(self.qck, r_qck, reset=0)
         m.submodules += FFSynchronizer(self.qd_i, r_qd_i, reset=0)
 
         # Reset signals when qss is high
@@ -266,7 +266,7 @@ class QbusTest(Elaboratable):
         r_qd_i = Signal(4)
 
         m.submodules += FFSynchronizer(qss, r_qss, reset=1)
-        m.submodules += FFSynchronizer(qck, r_qck, reset=1)
+        m.submodules += FFSynchronizer(qck, r_qck, reset=0)
         m.submodules += FFSynchronizer(qd_i, r_qd_i, reset=0)
 
         with m.If(~r_qss & pwr_on_reset.all()):
