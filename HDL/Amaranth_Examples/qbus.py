@@ -11,6 +11,7 @@ from amaranth.lib.cdc import FFSynchronizer
 
 from HDL.Misc.pll import PLL
 from qspimem import QspiMem
+from sevensegtile import SevenSegmentTile
 
 BLADE = 1
 TILE = 3
@@ -151,7 +152,7 @@ class QbusTest(Elaboratable):
         m.d.comb += leds6.eq(nibbles)
 
         # Put Data on 7-segment display
-        m.submodules.seven = seven = SevenSegController()
+        m.submodules.seven = seven = SevenSegmentTile()
         display = Signal(8)
 
         # Get pins
@@ -159,22 +160,11 @@ class QbusTest(Elaboratable):
         leds7 = Cat([seg_pins.a, seg_pins.b, seg_pins.c, seg_pins.d,
                      seg_pins.e, seg_pins.f, seg_pins.g])
 
-        timer = Signal(19)
-        m.d.sync += timer.eq(timer + 1)
-
         m.d.comb += [
-            leds7.eq(seven.leds)
+            leds7.eq(seven.leds),
+            seg_pins.ca.eq(seven.ca),
+            seven.val.eq(Cat(display, addr[:4]))
         ]
-
-        for i in range(3):
-            m.d.comb += seg_pins.ca[i].eq(timer[17:19] == i)
-
-        with m.If(seg_pins.ca[2]):
-            m.d.comb += seven.val.eq(addr[:4])
-        with m.If(seg_pins.ca[1]):
-            m.d.comb += seven.val.eq(display[-4:])
-        with m.If(seg_pins.ca[0]):
-            m.d.comb += seven.val.eq(display[:4])
 
         with m.If(qspimem.wr):
             m.d.sync += display.eq(dout)
