@@ -72,7 +72,7 @@ class QspiMem(Elaboratable):
             with m.If(new_nibble):
                 m.d[self.domain] += r_nibble_count.eq(r_nibble_count + 1)
 
-        with m.FSM():
+        with m.FSM(domain=self.domain):
             with m.State("COMMAND"):
                 with m.If(new_nibble):
                     # Read in the byte with the command bit and the top 7 address bits
