@@ -1,8 +1,17 @@
 from amaranth import *
+from amaranth.build import *
 
 from mystorm_boards.icelogicbus import *
 
 from hyperflash_write import HyperflashWrite, HyperbusPins
+
+LED_BLADE = 1
+
+led_blade = [
+    Resource("leds6", 0,
+             Subsignal("leds", Pins("1 2 3 4 5 6", dir="o", invert=True, conn=("blade", LED_BLADE))),
+             Attrs(IO_STANDARD="SB_LVCMOS"))
+]
 
 
 class TestHyperflash(Elaboratable):
@@ -12,7 +21,7 @@ class TestHyperflash(Elaboratable):
         hbus = platform.request("hyperbus", 0)
         pins = HyperbusPins()
 
-        m.submodules.hfw = hfw = HyperflashWrite(pins=pins)
+        m.submodules.hfw = hfw = HyperflashWrite(pins=pins, init_latency=16)
 
         m.d.comb += [
             hbus.clk.o.eq(pins.clk_o),
@@ -33,4 +42,5 @@ class TestHyperflash(Elaboratable):
 
 if __name__ == "__main__":
     platform = IceLogicBusPlatform()
+    platform.add_resources(led_blade)
     platform.build(TestHyperflash(), nextpnr_opts="--timing-allow-fail", do_program=True)

@@ -21,4 +21,4 @@ if __name__ == "__main__":
     sim.add_sync_process(process)
 
     with sim.write_vcd("test.vcd", "test.gtkw"):
-        sim.run_until(3e-6, run_passive=True)
+        sim.run_until(5e-6, run_passive=True)
