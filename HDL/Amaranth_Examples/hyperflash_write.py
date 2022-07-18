@@ -21,9 +21,19 @@ WRITE = 2
 
 class HyperflashWrite(Elaboratable):
     def __init__(self, pins, init_latency=16):
-        self.cmd  = Signal(2)
-        self.addr = Signal(24)
-        self.din  = Signal(8)
+        # Input
+        self.cmd  = Signal(2)  # Erase, Write or None
+        self.start_addr = Signal(24)  # byte address
+        self.len = Signal(10)  # Length of data in words
+        self.din  = Signal(16)  # Next data item to write
+
+        # Output
+        self.addr = Signal(24)  # byte address of next item
+        self.next = Signal()  # next item requirted
+        self.done = Signal()  # command done
+        self.err  = Signal()  # command failed
+
+        # Parameters
         self.pins = pins
         self.init_latency = init_latency
 
@@ -31,6 +41,9 @@ class HyperflashWrite(Elaboratable):
 
     def elaborate(self, platform):
         m = Module()
+
+        sector = self.start_addr[18:]
+        word_addr = self.start_addr[1:]
 
         if platform is None:
             leds6 = Signal(6)
@@ -45,6 +58,30 @@ class HyperflashWrite(Elaboratable):
 
         # Data shift register
         sr = Signal(64)
+
+        def set_sr(addr, data):
+            m.d.sync += [
+                sr[63].eq(0),  # write
+                sr[62].eq(0),  # not used
+                sr[61].eq(0),  # burst not used
+                sr[32:61].eq(C(addr, 23)[3:]),  # half-page offset
+                sr[19:32].eq(0),  # reserved
+                sr[16:19].eq(C(addr, 23)[:3]),  # half page address
+                sr[:16].eq(C(data, 16))
+            ]
+
+        def set_sr_sector(sector, data):
+            m.d.sync += [
+                sr[63].eq(0),  # write
+                sr[62].eq(0),  # not used
+                sr[61].eq(0),  # burst not used
+                sr[46:61].eq(sector),
+                sr[32:46].eq(0),
+                sr[19:32].eq(0),  # reserved
+                sr[16:19].eq(0x0),
+                sr[0:16].eq(C(data, 16))
+            ]
+
 
         # Incoming data
         dat_r = Signal(16, reset=0x80)
@@ -80,261 +117,200 @@ class HyperflashWrite(Elaboratable):
                     counter.eq(0),
                     self.pins.rwds_oe.eq(0),
                     csn.eq(1),
-                    sr[63].eq(0),  # Always write
-                    sr[62].eq(0),  # Memory
-                    sr[61].eq(0),  # Burst type not used
-                    sr[19:32].eq(0), # Reserved
                     self.pins.dq_oe.eq(1),
                 ]
                 with m.If(self.cmd == ERASE):
+                    set_sr(0x555, 0xAA)  # Unlock 1
                     m.d.sync += [
                         csn.eq(0),
-                        counter.eq(8),
-                        sr[16:19].eq(0x5),  # Send Unlock 1
-                        sr[32:61].eq(0xAA),
-                        sr[0:16].eq(0x00AA)
+                        counter.eq(8)
                     ]
-                    m.next = "EWAIT1"
+                    m.next = "E_WAIT1"
                 with m.If(self.cmd == WRITE):
+                    set_sr(0x555, 0xAA)  # Unlock 1
                     m.d.sync += [
                         csn.eq(0),
-                        counter.eq(8),
-                        sr[16:19].eq(0x5),  # Send Unlock 1
-                        sr[32:61].eq(0xAA),
-                        sr[0:16].eq(0x00AA)
+                        counter.eq(8)
                     ]
-                    m.next = "WWAIT1"
-            with m.State("EWAIT1"):
+                    m.next = "W_WAIT1"
+            with m.State("E_WAIT1"):
                 with m.If(counter == 1):
                     m.d.sync += csn.eq(1)
-                    m.next = "EUNLOCK2"
-            with m.State("EUNLOCK2"):
+                    m.next = "E_UNLOCK2"
+            with m.State("E_UNLOCK2"):
+                set_sr(0x2AA, 0x55)  # Unlock2
                 m.d.sync += [
                     csn.eq(0),
-                    counter.eq(8),
-                    sr[63].eq(0),  # Always write
-                    sr[62].eq(0),  # Memory
-                    sr[61].eq(0),  # Burst type not used
-                    sr[19:32].eq(0),  # Reserved
-                    sr[16:19].eq(0x2),
-                    sr[32:61].eq(0x55),
-                    sr[0:16].eq(0x0055)
+                    counter.eq(8)
                 ]
-                m.next = "EWAIT2"
-            with m.State("EWAIT2"):
+                m.next = "E_WAIT2"
+            with m.State("E_WAIT2"):
                 with m.If(counter == 1):
                     m.d.sync += csn.eq(1)
-                    m.next = "ECMD1"
-            with m.State("ECMD1"):
+                    m.next = "E_CMD1"
+            with m.State("E_CMD1"):
+                set_sr(0x555, 0x80)
                 m.d.sync += [
                     csn.eq(0),
-                    counter.eq(8),
-                    sr[63].eq(0),  # Always write
-                    sr[62].eq(0),  # Memory
-                    sr[61].eq(0),  # Burst type not used
-                    sr[19:32].eq(0),  # Reserved
-                    sr[16:19].eq(0x5),
-                    sr[32:61].eq(0xAA),
-                    sr[0:16].eq(0x0080)
+                    counter.eq(8)
                 ]
-                m.next = "EWAIT3"
-            with m.State("EWAIT3"):
+                m.next = "E_WAIT3"
+            with m.State("E_WAIT3"):
                 with m.If(counter == 1):
                     m.d.sync += csn.eq(1)
-                    m.next = "ECMD2"
-            with m.State("ECMD2"):
+                    m.next = "E_CMD2"
+            with m.State("E_CMD2"):
+                set_sr(0x555, 0xAA)  # Unlock1
                 m.d.sync += [
                     csn.eq(0),
-                    counter.eq(8),
-                    sr[63].eq(0),  # Always write
-                    sr[62].eq(0),  # Memory
-                    sr[61].eq(0),  # Burst type not used
-                    sr[19:32].eq(0),  # Reserved
-                    sr[16:19].eq(0x5),
-                    sr[32:61].eq(0xAA),
-                    sr[0:16].eq(0x00AA)
+                    counter.eq(8)
                 ]
-                m.next = "EWAIT4"
-            with m.State("EWAIT4"):
+                m.next = "E_WAIT4"
+            with m.State("E_WAIT4"):
                 with m.If(counter == 1):
                     m.d.sync += csn.eq(1)
-                    m.next = "ECMD3"
-            with m.State("ECMD3"):
+                    m.next = "E_CMD3"
+            with m.State("E_CMD3"):
+                set_sr(0x2AA, 0x55)  # Unlock2
                 m.d.sync += [
                     csn.eq(0),
-                    counter.eq(8),
-                    sr[63].eq(0),  # Always write
-                    sr[62].eq(0),  # Memory
-                    sr[61].eq(0),  # Burst type not used
-                    sr[19:32].eq(0),  # Reserved
-                    sr[16:19].eq(0x2),
-                    sr[32:61].eq(0x55),
-                    sr[0:16].eq(0x0055)
+                    counter.eq(8)
                 ]
-                m.next = "EWAIT5"
-            with m.State("EWAIT5"):
+                m.next = "E_WAIT5"
+            with m.State("E_WAIT5"):
                 with m.If(counter == 1):
                     m.d.sync += csn.eq(1)
                     m.next = "ERASE"
             with m.State("ERASE"):
+                set_sr_sector(sector, 0x30)
                 m.d.sync += [
                     csn.eq(0),
                     counter.eq(8),
-                    sr[63].eq(0),  # Always write
-                    sr[62].eq(0),  # Memory
-                    sr[61].eq(0),  # Burst type not used
-                    sr[19:32].eq(0),  # Reserved
-                    sr[16:19].eq(0x0),
-                    sr[32:61].eq(0x0), # Segment 0 for now
-                    sr[0:16].eq(0x0030)
                 ]
-                m.next = "EWAIT6"
-            with m.State("EWAIT6"):
+                m.next = "E_WAIT6"
+            with m.State("E_WAIT6"):
                 with m.If(counter == 1):
                     m.d.sync += csn.eq(1)
                     m.next = "STATUS"
-            with m.State("WWAIT1"):
+            with m.State("W_WAIT1"):
                 with m.If(counter == 1):
                     m.d.sync += csn.eq(1)
-                    m.next = "WUNLOCK2"
-            with m.State("WUNLOCK2"):
+                    m.next = "W_UNLOCK2"
+            with m.State("W_UNLOCK2"):
+                set_sr(0x2AA, 0x55)  # Unlock2
                 m.d.sync += [
                     csn.eq(0),
                     counter.eq(8),
-                    sr[63].eq(0),  # Always write
-                    sr[62].eq(0),  # Memory
-                    sr[61].eq(0),  # Burst type not used
-                    sr[19:32].eq(0),  # Reserved
-                    sr[16:19].eq(0x2),
-                    sr[32:61].eq(0x55),
-                    sr[0:16].eq(0x0055)
                 ]
-                m.next = "WWAIT2"
-            with m.State("WWAIT2"):
+                m.next = "W_WAIT2"
+            with m.State("W_WAIT2"):
                 with m.If(counter == 1):
                     m.d.sync += csn.eq(1)
-                    m.next = "WCMD1"
-            with m.State("WCMD1"):
+                    m.next = "W_CMD1"
+            with m.State("W_CMD1"):
+                set_sr_sector(sector, 0x25)
                 m.d.sync += [
                     csn.eq(0),
                     counter.eq(8),
-                    sr[63].eq(0),  # Always write
-                    sr[62].eq(0),  # Memory
-                    sr[61].eq(0),  # Burst type not used
-                    sr[19:32].eq(0),  # Reserved
-                    sr[16:19].eq(0x0), # Sector address 0
-                    sr[32:61].eq(0x0),
-                    sr[0:16].eq(0x0025)
                 ]
-                m.next = "WWAIT3"
-            with m.State("WWAIT3"):
+                m.next = "W_WAIT3"
+            with m.State("W_WAIT3"):
                 with m.If(counter == 1):
                     m.d.sync += csn.eq(1)
-                    m.next = "WCMD2"
-            with m.State("WCMD2"):
+                    m.next = "W_CMD2"
+            with m.State("W_CMD2"):
                 m.d.sync += [
                     csn.eq(0),
                     counter.eq(8),
                     sr[63].eq(0),  # Always write
-                    sr[62].eq(0),  # Memory
+                    sr[62].eq(0),  # Not used
                     sr[61].eq(0),  # Burst type not used
                     sr[19:32].eq(0),  # Reserved
                     sr[16:19].eq(0x0),
-                    sr[32:61].eq(0x0),
+                    sr[32:46].eq(0),
+                    sr[46:61].eq(sector),
                     sr[0:16].eq(0x0001)  # write 2 words
                 ]
-                m.next = "WWAIT4"
-            with m.State("WWAIT4"):
+                m.next = "W_WAIT4"
+            with m.State("W_WAIT4"):
                 with m.If(counter == 1):
                     m.d.sync += csn.eq(1)
-                    m.next = "WDAT1"
-            with m.State("WDAT1"):
+                    m.next = "W_DAT1"
+            with m.State("W_DAT1"):
                 m.d.sync += [
                     csn.eq(0),
                     counter.eq(8),
                     sr[63].eq(0),  # Always write
-                    sr[62].eq(0),  # Memory
+                    sr[62].eq(0),  # Not used
                     sr[61].eq(0),  # Burst type not used
                     sr[19:32].eq(0),  # Reserved
-                    sr[16:19].eq(0x0), # Write 0 to address 0
-                    sr[32:61].eq(0x0),
+                    sr[16:19].eq(word_addr[:3]), # Write 0 to address 0
+                    sr[32:61].eq(word_addr[3:]),
                     sr[0:16].eq(0x0000)
                 ]
-                m.next = "WWAIT5"
-            with m.State("WWAIT5"):
+                m.next = "W_WAIT5"
+            with m.State("W_WAIT5"):
                 with m.If(counter == 1):
                     m.d.sync += csn.eq(1)
-                    m.next = "WDAT2"
-            with m.State("WDAT2"):
+                    m.next = "W_DAT2"
+            with m.State("W_DAT2"):
                 m.d.sync += [
                     csn.eq(0),
                     counter.eq(8),
                     sr[63].eq(0),  # Always write
-                    sr[62].eq(0),  # Memory
+                    sr[62].eq(0),  # Not used
                     sr[61].eq(0),  # Burst type not used
                     sr[19:32].eq(0),  # Reserved
-                    sr[16:19].eq(0x1),  # Write 1 to address 1
-                    sr[32:61].eq(0x0),
+                    sr[16:19].eq(word_addr[:3] + 1),  # Write 1 to address 1
+                    sr[32:61].eq(word_addr[3:]),
                     sr[0:16].eq(0x0001)
                 ]
-                m.next = "WWAIT6"
-            with m.State("WWAIT6"):
+                m.next = "W_WAIT6"
+            with m.State("W_WAIT6"):
                 with m.If(counter == 1):
                     m.d.sync += csn.eq(1)
                     m.next = "WRITE"
             with m.State("WRITE"):
+                set_sr_sector(sector, 0x29)
                 m.d.sync += [
                     csn.eq(0),
                     counter.eq(8),
-                    sr[63].eq(0),  # Always write
-                    sr[62].eq(0),  # Memory
-                    sr[61].eq(0),  # Burst type not used
-                    sr[19:32].eq(0),  # Reserved
-                    sr[16:19].eq(0x0),
-                    sr[32:61].eq(0x0), # Segment 0
-                    sr[0:16].eq(0x0029)
                 ]
-                m.next = "WWAIT7"
-            with m.State("WWAIT7"):
+                m.next = "W_WAIT7"
+            with m.State("W_WAIT7"):
                 with m.If(counter == 1):
                     m.d.sync += csn.eq(1)
                     m.next = "STATUS"
             with m.State("STATUS"):
+                set_sr(0x555, 0x70)
                 m.d.sync += [
                     csn.eq(0),
                     counter.eq(8),
-                    sr[63].eq(0),  # Always write
-                    sr[62].eq(0),  # Memory
-                    sr[61].eq(0),  # Burst type not used
-                    sr[19:32].eq(0),  # Reserved
-                    sr[16:19].eq(0x5),
-                    sr[32:61].eq(0xAA),
-                    sr[0:16].eq(0x0070),
                 ]
-                m.next = "SWAIT1"
-            with m.State("SWAIT1"):
+                m.next = "S_WAIT1"
+            with m.State("S_WAIT1"):
                 with m.If(counter == 1):
                     m.d.sync += csn.eq(1)
-                    m.next = "SREAD"
-            with m.State("SREAD"):
+                    m.next = "S_READ"
+            with m.State("S_READ"):
                 m.d.sync += [
                     csn.eq(0),
                     self.pins.dq_oe.eq(1),
                     counter.eq(6),
                     # Assign CA
                     sr[63].eq(1),  # Read
-                    sr[62].eq(0),  # memory space
-                    sr[61].eq(0),  # burst not used
-                    sr[32:61].eq(0),  # upper address
+                    sr[62].eq(0),  # Not used
+                    sr[61].eq(0),  # Burst type not used
+                    sr[32:61].eq(0),  # Status register
                     sr[19:32].eq(0),  # RFU
-                    sr[16:19].eq(0),  # lower address
+                    sr[16:19].eq(0),  # Status register
                 ]
-                m.next = "SWAIT2"
-            with m.State("SWAIT2"):
+                m.next = "S_WAIT2"
+            with m.State("S_WAIT2"):
                 with m.If(counter == 1):
                     m.d.sync += counter.eq(2 * self.latency - 2)
-                    m.next = "SWAIT3"
-            with m.State("SWAIT3"):
+                    m.next = "S_WAIT3"
+            with m.State("S_WAIT3"):
                 with m.If(counter == 1):
                     m.d.sync += [
                         self.pins.dq_oe.eq(0),

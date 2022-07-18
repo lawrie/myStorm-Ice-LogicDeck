@@ -35,8 +35,14 @@ class TestHyperflash(Elaboratable):
             hbus.data.o.eq(pins.dq_o),
             hbus.data.oe.eq(pins.dq_oe),
             pins.dq_i.eq(hbus.data.i),
+            hfw.start_addr.eq(0),
+            hfw.len.eq(2),
             hfw.cmd.eq(2)
         ]
+
+        # Set data to word address
+        with m.If(hfw.next):
+            m.d.sync += hfw.din.eq(hfw.addr[1:])
 
         return m
 
