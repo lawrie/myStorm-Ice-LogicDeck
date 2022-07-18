@@ -12,8 +12,9 @@ if __name__ == "__main__":
     sim.add_clock(4e-8)
 
     def process():
-        yield hf.cmd.eq(1)
-        yield hf.start_addr.eq(0x40000)  # Sector 1
+        yield hf.cmd.eq(2)
+        yield hf.start_addr.eq(0x00000)
+        yield hf.len.eq(2)
         yield pins.csn_o.eq(1)
         yield
         yield hf.cmd.eq(0)

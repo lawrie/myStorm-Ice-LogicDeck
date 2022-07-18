@@ -24,7 +24,7 @@ class HyperflashWrite(Elaboratable):
         # Input
         self.cmd  = Signal(2)  # Erase, Write or None
         self.start_addr = Signal(24)  # byte address
-        self.len = Signal(10)  # Length of data in words
+        self.len = Signal(9)  # Length of data in words, max 256
         self.din  = Signal(16)  # Next data item to write
 
         # Output
@@ -43,7 +43,9 @@ class HyperflashWrite(Elaboratable):
         m = Module()
 
         sector = self.start_addr[18:]
-        word_addr = self.start_addr[1:]
+
+        word_addr = Signal(23)
+        rem_words = Signal(10)
 
         if platform is None:
             leds6 = Signal(6)
@@ -106,7 +108,7 @@ class HyperflashWrite(Elaboratable):
         m.d.comb += [
             self.pins.clk_o.eq(clk),
             self.pins.csn_o.eq(csn),
-            self.pins.dq_o.eq(sr[-8:]),
+            self.pins.dq_o.eq(sr[-8:]),self.addr.eq(word_addr),
             led.eq(~dat_r[7]),
             leds6.eq(dat_r[:6])
         ]
@@ -117,7 +119,7 @@ class HyperflashWrite(Elaboratable):
                     counter.eq(0),
                     self.pins.rwds_oe.eq(0),
                     csn.eq(1),
-                    self.pins.dq_oe.eq(1),
+                    self.pins.dq_oe.eq(1)
                 ]
                 with m.If(self.cmd == ERASE):
                     set_sr(0x555, 0xAA)  # Unlock 1
@@ -130,7 +132,9 @@ class HyperflashWrite(Elaboratable):
                     set_sr(0x555, 0xAA)  # Unlock 1
                     m.d.sync += [
                         csn.eq(0),
-                        counter.eq(8)
+                        counter.eq(8),
+                        word_addr.eq(self.start_addr[1:]),
+                        rem_words.eq(self.len)
                     ]
                     m.next = "W_WAIT1"
             with m.State("E_WAIT1"):
@@ -229,14 +233,15 @@ class HyperflashWrite(Elaboratable):
                     sr[16:19].eq(0x0),
                     sr[32:46].eq(0),
                     sr[46:61].eq(sector),
-                    sr[0:16].eq(0x0001)  # write 2 words
+                    sr[0:16].eq(self.len - 1)  # write 2 words
                 ]
                 m.next = "W_WAIT4"
             with m.State("W_WAIT4"):
                 with m.If(counter == 1):
                     m.d.sync += csn.eq(1)
-                    m.next = "W_DAT1"
-            with m.State("W_DAT1"):
+                    m.d.comb += self.next.eq(1)
+                    m.next = "W_DATA"
+            with m.State("W_DATA"):
                 m.d.sync += [
                     csn.eq(0),
                     counter.eq(8),
@@ -244,32 +249,21 @@ class HyperflashWrite(Elaboratable):
                     sr[62].eq(0),  # Not used
                     sr[61].eq(0),  # Burst type not used
                     sr[19:32].eq(0),  # Reserved
-                    sr[16:19].eq(word_addr[:3]), # Write 0 to address 0
+                    sr[16:19].eq(word_addr[:3]),  # data
                     sr[32:61].eq(word_addr[3:]),
-                    sr[0:16].eq(0x0000)
+                    sr[0:16].eq(self.din),
+                    rem_words.eq(rem_words - 1),
+                    word_addr.eq(word_addr + 1)
                 ]
                 m.next = "W_WAIT5"
             with m.State("W_WAIT5"):
                 with m.If(counter == 1):
                     m.d.sync += csn.eq(1)
-                    m.next = "W_DAT2"
-            with m.State("W_DAT2"):
-                m.d.sync += [
-                    csn.eq(0),
-                    counter.eq(8),
-                    sr[63].eq(0),  # Always write
-                    sr[62].eq(0),  # Not used
-                    sr[61].eq(0),  # Burst type not used
-                    sr[19:32].eq(0),  # Reserved
-                    sr[16:19].eq(word_addr[:3] + 1),  # Write 1 to address 1
-                    sr[32:61].eq(word_addr[3:]),
-                    sr[0:16].eq(0x0001)
-                ]
-                m.next = "W_WAIT6"
-            with m.State("W_WAIT6"):
-                with m.If(counter == 1):
-                    m.d.sync += csn.eq(1)
-                    m.next = "WRITE"
+                    with m.If(rem_words > 0):
+                        m.d.comb += self.next.eq(1)
+                        m.next = "W_DATA"
+                    with m.Else():
+                        m.next = "WRITE"
             with m.State("WRITE"):
                 set_sr_sector(sector, 0x29)
                 m.d.sync += [
