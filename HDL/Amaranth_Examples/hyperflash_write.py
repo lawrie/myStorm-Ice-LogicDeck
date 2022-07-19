@@ -61,6 +61,14 @@ class HyperflashWrite(Elaboratable):
         # Data shift register
         sr = Signal(64)
 
+        def set_sr_write():
+            m.d.sync += [
+                sr[63].eq(0),  # write
+                sr[62].eq(0),  # not used
+                sr[61].eq(0),  # burst not used
+                sr[19:32].eq(0),  # reserved
+            ]
+
         def set_sr(addr, data):
             m.d.sync += [
                 sr[63].eq(0),  # write
@@ -108,9 +116,10 @@ class HyperflashWrite(Elaboratable):
         m.d.comb += [
             self.pins.clk_o.eq(clk),
             self.pins.csn_o.eq(csn),
-            self.pins.dq_o.eq(sr[-8:]),self.addr.eq(word_addr),
+            self.pins.dq_o.eq(sr[-8:]),
+            self.addr.eq(word_addr),
             led.eq(~dat_r[7]),
-            leds6.eq(dat_r[:6])
+            leds6.eq(Cat(self.done, self.err))
         ]
 
         with m.FSM() as fsm:
@@ -125,7 +134,9 @@ class HyperflashWrite(Elaboratable):
                     set_sr(0x555, 0xAA)  # Unlock 1
                     m.d.sync += [
                         csn.eq(0),
-                        counter.eq(8)
+                        counter.eq(8),
+                        self.done.eq(0),
+                        self.err.eq(0)
                     ]
                     m.next = "E_WAIT1"
                 with m.If(self.cmd == WRITE):
@@ -133,6 +144,8 @@ class HyperflashWrite(Elaboratable):
                     m.d.sync += [
                         csn.eq(0),
                         counter.eq(8),
+                        self.done.eq(0),
+                        self.err.eq(0),
                         word_addr.eq(self.start_addr[1:]),
                         rem_words.eq(self.len)
                     ]
@@ -223,13 +236,10 @@ class HyperflashWrite(Elaboratable):
                     m.d.sync += csn.eq(1)
                     m.next = "W_CMD2"
             with m.State("W_CMD2"):
+                set_sr_write()
                 m.d.sync += [
                     csn.eq(0),
                     counter.eq(8),
-                    sr[63].eq(0),  # Always write
-                    sr[62].eq(0),  # Not used
-                    sr[61].eq(0),  # Burst type not used
-                    sr[19:32].eq(0),  # Reserved
                     sr[16:19].eq(0x0),
                     sr[32:46].eq(0),
                     sr[46:61].eq(sector),
@@ -242,13 +252,10 @@ class HyperflashWrite(Elaboratable):
                     m.d.comb += self.next.eq(1)
                     m.next = "W_DATA"
             with m.State("W_DATA"):
+                set_sr_write()
                 m.d.sync += [
                     csn.eq(0),
                     counter.eq(8),
-                    sr[63].eq(0),  # Always write
-                    sr[62].eq(0),  # Not used
-                    sr[61].eq(0),  # Burst type not used
-                    sr[19:32].eq(0),  # Reserved
                     sr[16:19].eq(word_addr[:3]),  # data
                     sr[32:61].eq(word_addr[3:]),
                     sr[0:16].eq(self.din),
@@ -321,6 +328,15 @@ class HyperflashWrite(Elaboratable):
                     self.pins.dq_oe.eq(1),
                     csn.eq(1)
                 ]
-                m.next = "STATUS"
+                with m.If(sr[7] == 1):
+                    m.d.sync += [
+                        self.done.eq(1),
+                        self.err.eq(sr[:7].any())
+                    ]
+                    m.next = "DONE"
+                with m.Else():
+                    m.next = "STATUS"
+            with m.State("DONE"):
+                m.next = "IDLE"
 
         return m
