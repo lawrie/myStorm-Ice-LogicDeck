@@ -87,6 +87,14 @@ class TestHyperflash(Elaboratable):
                 with m.Else():
                     m.d.sync += cmd.eq(2)
 
+        led = platform.request("led")
+        leds6 = platform.request("leds6")
+
+        m.d.comb += [
+            led.eq(hfw.done),
+            leds6.eq(hfw.err)
+        ]
+
         return m
 
 

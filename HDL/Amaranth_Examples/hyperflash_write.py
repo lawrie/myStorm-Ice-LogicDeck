@@ -47,13 +47,6 @@ class HyperflashWrite(Elaboratable):
         word_addr = Signal(23)
         rem_words = Signal(10)
 
-        if platform is None:
-            leds6 = Signal(6)
-            led = Signal()
-        else:
-            leds6 = platform.request("leds6")
-            led = platform.request("led")
-
         counter = Signal(8)
         clk = Signal()
         csn = Signal(reset=1)
@@ -117,9 +110,7 @@ class HyperflashWrite(Elaboratable):
             self.pins.clk_o.eq(clk),
             self.pins.csn_o.eq(csn),
             self.pins.dq_o.eq(sr[-8:]),
-            self.addr.eq(word_addr),
-            led.eq(~dat_r[7]),
-            leds6.eq(Cat(self.done, self.err))
+            self.addr.eq(word_addr)
         ]
 
         with m.FSM() as fsm:
